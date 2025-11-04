@@ -92,7 +92,7 @@ with col2:
 
 
 def save_image(state_name):
-    path = os.path.join(os.getcwd(), "images")
+    path = os.path.join(os.getcwd(), "uploads")
     if not os.path.exists(path):
         os.makedirs(path)
 
