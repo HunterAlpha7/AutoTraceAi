@@ -43,7 +43,8 @@ css = r"""
 st.markdown(css, unsafe_allow_html=True)
 
 
-st.title("Damage Decoder")
+st.set_page_config(page_title="AutoTraceAi", page_icon="🚗")
+st.title("AutoTraceAi")
 
 
 st.subheader("Upload your car crash pictures")
@@ -152,3 +153,4 @@ if modal.is_open():
             </div>
         """
         components.html(html_string, height=350)
+0)

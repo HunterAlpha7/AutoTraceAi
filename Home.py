@@ -1,8 +1,9 @@
+import streamlit as st
+st.set_page_config(page_title="AutoTraceAi", page_icon="🚗")
 from dotenv import load_dotenv
 import cv2
 import numpy as np
 import os
-import streamlit as st
 from llama_index import SimpleDirectoryReader
 from pydantic_llm import (
     pydantic_llm,
@@ -55,7 +56,7 @@ for state_name in states_names:
         st.session_state[state_name] = None
 
 
-st.title("Damage Decoder")
+st.title("AutoTraceAi")
 
 
 st.subheader("Upload your car crash pictures")
@@ -102,11 +103,11 @@ def save_image(state_name):
 
 
 def delete_image(state_name):
-    path = os.path.join(os.getcwd(), "images")
-    if st.session_state[state_name] is not None and os.path.exists(
-        os.path.join(path, f"{state_name}.jpg")
-    ):
-        os.remove(os.path.join(path, f"{state_name}.jpg"))
+    # Delete from the uploads directory where files were saved
+    path = os.path.join(os.getcwd(), "uploads")
+    file_path = os.path.join(path, f"{state_name}.jpg")
+    if st.session_state[state_name] is not None and os.path.exists(file_path):
+        os.remove(file_path)
 
 
 with st.form(key="car_form"):
@@ -127,7 +128,7 @@ with st.form(key="car_form"):
 
     selected_llm_model = st.selectbox(
         "Select LLM model",
-        ("Gemini", "OpenAI"),
+        ("Gemini", "OpenAI", "OpenRouter"),
     )
 
     submit_button = st.form_submit_button(label="Submit")
@@ -136,7 +137,8 @@ if submit_button:
     with st.spinner("Processing..."):
         for state_name in states_names:
             save_image(state_name)
-        path = os.path.join(os.getcwd(), "images")
+        # Read uploaded images from the dedicated uploads directory
+        path = os.path.join(os.getcwd(), "uploads")
 
         image_documents = SimpleDirectoryReader(path).load_data()
 

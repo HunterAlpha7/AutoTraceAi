@@ -4,6 +4,15 @@ from llama_index.output_parsers import PydanticOutputParser
 from llama_index.multi_modal_llms.openai import OpenAIMultiModal
 from pydantic import BaseModel, Field
 from typing_extensions import Annotated
+import os
+import base64
+import json
+
+try:
+    # OpenAI client (used for OpenRouter via OpenAI-compatible API)
+    from openai import OpenAI
+except Exception:
+    OpenAI = None
 
 damages_initial_prompt_str = """
 The images are of a damaged {make_name} {model_name} {year} car. 
@@ -154,14 +163,113 @@ class ConditionsReport(BaseModel):
 def pydantic_llm(
     output_class, image_documents, prompt_template_str, selected_llm_model
 ):
-    openai_mm_llm = OpenAIMultiModal(model="gpt-4-vision-preview")
-    gemini_llm = GeminiMultiModal(model_name="models/gemini-pro-vision")
-
-    multi_modal_llm = gemini_llm
-
+    # Lazily instantiate the selected LLM to avoid requiring credentials for unused providers
     if selected_llm_model == "OpenAI":
-        multi_modal_llm = openai_mm_llm
+        multi_modal_llm = OpenAIMultiModal(model="gpt-4-vision-preview")
+    elif selected_llm_model == "OpenRouter":
+        # For OpenRouter, use the OpenAI-compatible client directly to avoid
+        # OpenAIMultiModal's hardcoded model validation.
+        multi_modal_llm = None
+    else:  # Gemini
+        multi_modal_llm = GeminiMultiModal(model_name="models/gemini-pro-vision")
 
+    # OpenRouter direct path
+    if selected_llm_model == "OpenRouter":
+        if OpenAI is None:
+            raise RuntimeError(
+                "OpenAI client not available. Please ensure the 'openai' package is installed."
+            )
+
+        api_key = os.getenv("OPENAI_API_KEY")
+        base_url = os.getenv("OPENAI_BASE_URL")
+        if not api_key or not base_url:
+            raise RuntimeError(
+                "Missing OPENAI_API_KEY or OPENAI_BASE_URL in environment for OpenRouter."
+            )
+
+        client = OpenAI(api_key=api_key, base_url=base_url)
+
+        # Build content: initial instructions + images as base64 data URLs
+        contents = [{"type": "text", "text": prompt_template_str}]
+
+        # Convert image documents to base64 data URLs
+        for doc in image_documents:
+            image_path = None
+            # Try common attributes for local path
+            if hasattr(doc, "metadata") and isinstance(doc.metadata, dict):
+                image_path = doc.metadata.get("file_path") or doc.metadata.get("path")
+            if not image_path:
+                for attr in ("id_", "doc_id", "source_path"):
+                    if hasattr(doc, attr):
+                        candidate = getattr(doc, attr)
+                        if isinstance(candidate, str) and os.path.exists(candidate):
+                            image_path = candidate
+                            break
+            if not image_path and hasattr(doc, "text") and isinstance(doc.text, str):
+                maybe = doc.text.strip()
+                if os.path.exists(maybe):
+                    image_path = maybe
+
+            if not image_path:
+                continue
+
+            try:
+                with open(image_path, "rb") as f:
+                    b64 = base64.b64encode(f.read()).decode("utf-8")
+                mime = "image/jpeg"
+                lower = image_path.lower()
+                if lower.endswith(".png"):
+                    mime = "image/png"
+                elif lower.endswith(".webp"):
+                    mime = "image/webp"
+                contents.append({
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{mime};base64,{b64}"},
+                })
+            except Exception:
+                continue
+
+        system_prompt = (
+            "You are an expert auto damage estimator. "
+            "Analyze provided vehicle images and respond ONLY with JSON. "
+            "Each condition field must be an integer: 0 (not visible), 1 (OK), 2 (minor), 3 (major)."
+        )
+
+        # Provide a JSON schema hint to steer formatting strictly
+        schema_hint = (
+            "Return a strictly valid JSON object with these required fields: "
+            "roof, windshield, hood, grill, front_bumper, right_mirror, left_mirror, "
+            "front_right_light, front_left_light, rear_window, trunk_tgate, trunk_cargo_area, "
+            "rear_bumper, right_tail_light, left_tail_light, left_rear_quarter, left_rear_door, "
+            "left_front_door, left_fender, left_front_tire, left_rear_tire, right_rear_quarter, "
+            "right_rear_door, right_front_door, right_fender, right_front_tire, right_rear_tire."
+        )
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": contents + [{"type": "text", "text": schema_hint}]},
+        ]
+
+        completion = client.chat.completions.create(
+            model="google/gemini-2.5-pro",
+            messages=messages,
+            temperature=0.2,
+        )
+
+        text = completion.choices[0].message.content
+        # Parse JSON
+        try:
+            data = json.loads(text)
+        except Exception:
+            # Strip code fences if present
+            text_stripped = text.strip()
+            if text_stripped.startswith("```") and text_stripped.endswith("```"):
+                text_stripped = text_stripped.strip("`\n")
+            data = json.loads(text_stripped)
+
+        return output_class.model_validate(data)
+
+    # Default path: use LlamaIndex program for OpenAI or Gemini
     llm_program = MultiModalLLMCompletionProgram.from_defaults(
         output_parser=PydanticOutputParser(output_class),
         image_documents=image_documents,
