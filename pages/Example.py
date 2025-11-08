@@ -20,14 +20,41 @@ modal = Modal("Damage Report", key="demo", max_width=1280)
 api_url = "https://dmg-decoder.up.railway.app"
 
 
-def create_report(data={"test": "123"}):
+def create_report(data: dict):
     url = f"{api_url}/api/create_report"
-    response = requests.post(
-        url, json=data, headers={"Content-Type": "application/json"}
-    )
-    json = response.json()
-    print(json)
-    return json["id"]
+    try:
+        resp = requests.post(
+            url,
+            json=data,
+            headers={"Content-Type": "application/json"},
+            timeout=20,
+        )
+        payload = {}
+        try:
+            payload = resp.json()
+        except Exception:
+            payload = {"status": resp.status_code, "message": resp.text}
+
+        print(payload)
+
+        if resp.status_code != 200:
+            st.warning(
+                f"Report service error ({resp.status_code}). Skipping report creation.",
+                icon="⚠️",
+            )
+            return None
+
+        report_id = payload.get("id") or payload.get("report_id")
+        if not report_id:
+            st.warning(
+                "Report service returned no id. Skipping report creation.",
+                icon="⚠️",
+            )
+            return None
+        return report_id
+    except requests.RequestException as e:
+        st.warning(f"Report service request failed: {e}", icon="⚠️")
+        return None
 
 
 load_dotenv()
@@ -98,7 +125,7 @@ if submit_button:
     with st.spinner("Processing..."):
         image_documents = SimpleDirectoryReader(images_directory).load_data()
 
-        conditions_report_response = pydantic_llm(
+        conditions_report_response, llm_meta = pydantic_llm(
             output_class=ConditionsReport,
             image_documents=image_documents,
             prompt_template_str=conditions_report_initial_prompt_str.format(
@@ -118,27 +145,34 @@ if submit_button:
                 "car_name": f"{selected_make} {selected_model} {selected_year}",
             }
         )
+        if id:
+            st.session_state["report_id"] = id
 
-        st.session_state["report_id"] = id
-
-        car_sides = ["front", "back", "left", "right"]
-        import boto3
-
-        s3 = boto3.resource("s3")
-
-        for side in car_sides:
-            colored_side = process_car_parts(dict(conditions_report_response), side)
-            in_memory_file = BytesIO()
-            colored_side.save(in_memory_file, format="PNG")
-            in_memory_file.seek(0)
-            s3.Bucket("elastic-llm").put_object(
-                Key=f"{id}/colored_car_{side}.png",
-                Body=in_memory_file,
+        if llm_meta.get("fallback_used"):
+            st.info(
+                "The model returned an empty or non-JSON response. Using a safe fallback; S3 upload skipped.",
+                icon="ℹ️",
             )
+        elif id:
+            car_sides = ["front", "back", "left", "right"]
+            import boto3
 
-        modal.open()
+            s3 = boto3.resource("s3")
 
-if modal.is_open():
+            for side in car_sides:
+                colored_side = process_car_parts(dict(conditions_report_response), side)
+                in_memory_file = BytesIO()
+                colored_side.save(in_memory_file, format="PNG")
+                in_memory_file.seek(0)
+                s3.Bucket("elastic-llm").put_object(
+                    Key=f"{id}/colored_car_{side}.png",
+                    Body=in_memory_file,
+                )
+
+        if id:
+            modal.open()
+
+if modal.is_open() and st.session_state.get("report_id"):
     with modal.container():
         st.markdown(
             f"<a href='{api_url}/report/{st.session_state['report_id']}' target='_blank'>Go to report</a>",

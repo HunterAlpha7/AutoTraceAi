@@ -7,6 +7,9 @@ from typing_extensions import Annotated
 import os
 import base64
 import json
+import logging
+from PIL import Image
+from io import BytesIO
 
 try:
     # OpenAI client (used for OpenRouter via OpenAI-compatible API)
@@ -192,7 +195,7 @@ def pydantic_llm(
         # Build content: initial instructions + images as base64 data URLs
         contents = [{"type": "text", "text": prompt_template_str}]
 
-        # Convert image documents to base64 data URLs
+        # Convert image documents to base64 data URLs with optimization
         for doc in image_documents:
             image_path = None
             # Try common attributes for local path
@@ -214,14 +217,15 @@ def pydantic_llm(
                 continue
 
             try:
-                with open(image_path, "rb") as f:
-                    b64 = base64.b64encode(f.read()).decode("utf-8")
+                # Downscale and compress to reduce prompt token load
+                with Image.open(image_path) as img:
+                    img = img.convert("RGB")
+                    img.thumbnail((1024, 1024))
+                    buf = BytesIO()
+                    img.save(buf, format="JPEG", quality=85, optimize=True)
+                    buf.seek(0)
+                    b64 = base64.b64encode(buf.read()).decode("utf-8")
                 mime = "image/jpeg"
-                lower = image_path.lower()
-                if lower.endswith(".png"):
-                    mime = "image/png"
-                elif lower.endswith(".webp"):
-                    mime = "image/webp"
                 contents.append({
                     "type": "image_url",
                     "image_url": {"url": f"data:{mime};base64,{b64}"},
@@ -253,21 +257,96 @@ def pydantic_llm(
         completion = client.chat.completions.create(
             model="google/gemini-2.5-pro",
             messages=messages,
-            temperature=0.2,
+            temperature=0.0,
+            response_format={"type": "json_object"},
+            # Set a high upper bound; provider caps to model limits and only uses what's needed
+            max_tokens=80000,
         )
 
-        text = completion.choices[0].message.content
-        # Parse JSON
-        try:
-            data = json.loads(text)
-        except Exception:
-            # Strip code fences if present
-            text_stripped = text.strip()
-            if text_stripped.startswith("```") and text_stripped.endswith("```"):
-                text_stripped = text_stripped.strip("`\n")
-            data = json.loads(text_stripped)
+        # Prefer parsed JSON if available (OpenAI SDK v2 provides .parsed when using response_format)
+        msg = completion.choices[0].message
+        if hasattr(msg, "parsed") and isinstance(msg.parsed, (dict, list)):
+            parsed_obj = msg.parsed
+            if isinstance(parsed_obj, list):
+                # Some providers may return a list-wrapped object
+                try:
+                    parsed_obj = parsed_obj[0]
+                except Exception:
+                    pass
+            try:
+                validated = output_class.model_validate(parsed_obj)
+                return validated, {"fallback_used": False}
+            except Exception:
+                # Fall through to text-based parsing
+                pass
 
-        return output_class.model_validate(data)
+        # Fallback to text content. Content may be a string or a list of segments.
+        content = getattr(msg, "content", "")
+        text = ""
+        if isinstance(content, str):
+            text = content
+        elif isinstance(content, list):
+            # Extract text fields from content array
+            parts = []
+            for item in content:
+                try:
+                    if isinstance(item, dict):
+                        # OpenAI-style: {type: 'text', text: '...'}
+                        if item.get("type") == "text" and isinstance(item.get("text"), str):
+                            parts.append(item["text"]) 
+                        # Some providers use {type: 'output_text', text: '...'}
+                        elif item.get("type") == "output_text" and isinstance(item.get("text"), str):
+                            parts.append(item["text"]) 
+                    # SDK object with .text
+                    elif hasattr(item, "text"):
+                        parts.append(getattr(item, "text"))
+                except Exception:
+                    continue
+            text = "\n".join([p for p in parts if isinstance(p, str)])
+        else:
+            text = str(content or "")
+
+        def _try_parse_json(raw: str):
+            # First attempt: direct parse
+            try:
+                return json.loads(raw)
+            except Exception:
+                pass
+            # Second: strip code fences
+            s = raw.strip()
+            if s.startswith("```") and s.endswith("```"):
+                s = s.strip("`\n")
+                try:
+                    return json.loads(s)
+                except Exception:
+                    pass
+            # Third: extract the first JSON object substring
+            start = s.find("{")
+            end = s.rfind("}")
+            if start != -1 and end != -1 and end > start:
+                try:
+                    return json.loads(s[start : end + 1])
+                except Exception:
+                    pass
+            return None
+
+        data = None
+        if text.strip():
+            data = _try_parse_json(text)
+
+        used_fallback = False
+        if data is None:
+            used_fallback = True
+            logging.warning(
+                "Empty or non-JSON response from provider; applying zeroed fallback ConditionsReport."
+            )
+            # Build a safe fallback with zeros for all integer fields
+            try:
+                data = {key: 0 for key in output_class.model_fields.keys()}
+            except Exception:
+                data = {}
+        validated = output_class.model_validate(data)
+        return validated, {"fallback_used": used_fallback}
 
     # Default path: use LlamaIndex program for OpenAI or Gemini
     llm_program = MultiModalLLMCompletionProgram.from_defaults(
@@ -279,4 +358,4 @@ def pydantic_llm(
     )
 
     response = llm_program()
-    return response
+    return response, {"fallback_used": False}
