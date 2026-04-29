@@ -254,13 +254,18 @@ def pydantic_llm(
             {"role": "user", "content": contents + [{"type": "text", "text": schema_hint}]},
         ]
 
+        max_tokens_env = os.getenv("MAX_TOKENS")
+        try:
+            max_tokens_value = int(max_tokens_env) if max_tokens_env else 80000
+        except (TypeError, ValueError):
+            max_tokens_value = 80000
+
         completion = client.chat.completions.create(
             model="google/gemini-2.5-pro",
             messages=messages,
             temperature=0.0,
             response_format={"type": "json_object"},
-            # Set a high upper bound; provider caps to model limits and only uses what's needed
-            max_tokens=80000,
+            max_tokens=max_tokens_value,
         )
 
         # Prefer parsed JSON if available (OpenAI SDK v2 provides .parsed when using response_format)

@@ -5,7 +5,10 @@
 - Streamlit UI handles image upload, selections, and result display.
 - Images are saved to `uploads/`, read as documents, and passed to an LLM.
 - The LLM returns a structured JSON that is validated against a Pydantic model.
-- A car colorizer generates visual overlays; results are uploaded to S3 and a report is created via an external API.
+- A car colorizer generates visual overlays.
+- Reporting flows:
+  - Home: renders a local HTML report in a modal and offers a download.
+  - Example page: uploads overlays to S3 and creates a report via an external API.
 
 ## Components
 
@@ -17,8 +20,9 @@
   - OpenRouter via OpenAI-compatible client (direct API calls)
 - ✅ Pydantic models for structured outputs (`ConditionsReport`, `DamagedPart`, `DamagedParts`)
 - 🎨 `car_colorizer.py` generates annotated side overlays
-- ☁️ AWS S3 (`boto3`) for storing colorized images
-- 📄 External Report Service (`https://dmg-decoder.up.railway.app`)
+- ☁️ AWS S3 (`boto3`) for storing colorized images (Example page)
+- 📄 External Report Service (`https://dmg-decoder.up.railway.app`) (Example page)
+- 🧾 Local report generation and display (Home page)
 
 ## Data Flow
 
@@ -37,9 +41,10 @@ flowchart LR
   PROG --> OUT[Pydantic ConditionsReport ✅]
   JSON --> OUT
   OUT --> CLR[Car Colorizer 🎨]
+  OUT --> MODAL[Local HTML Report 🧾]
   OUT --> S3[AWS S3 upload ☁️]
   OUT --> RS[External Report API 📄]
-  RS --> MODAL[Streamlit Modal 🔎]
+  RS --> LINK[Report Link 🔗]
 ```
 
 ## Sequence
@@ -66,9 +71,12 @@ sequenceDiagram
     OR-->>ST: JSON string
   end
   ST->>ST: Parse to Pydantic ConditionsReport
-  ST->>AWS: Upload colored car overlays
-  ST->>RS: POST conditions report
-  ST-->>U: Show modal with report link
+  par Home page
+    ST-->>U: Show local HTML report in modal + download
+  and Example page
+    ST->>AWS: Upload colored car overlays
+    ST->>RS: POST conditions report
+    ST-->>U: Show external report link
 ```
 
 ## System Prompts
@@ -151,8 +159,7 @@ right_rear_door, right_front_door, right_fender, right_front_tire, right_rear_ti
 - The LLM response is parsed into the `ConditionsReport` Pydantic model, which contains integer fields for each part (0–3).
 - This structured result drives:
   - 🎨 `car_colorizer.py` for overlays per side (`front`, `back`, `left`, `right`).
-  - ☁️ S3 uploads of the overlays.
-  - 📄 A POST to the external report API, shown in a Streamlit modal.
+  - 🧾 Local HTML report rendering (Home) or ☁️ S3 + 📄 external report API (Example).
 
 ## Project Structure (key paths)
 
@@ -192,6 +199,10 @@ OPENAI_API_KEY=sk-or-...your-key...
 # AWS_ACCESS_KEY_ID=...
 # AWS_SECRET_ACCESS_KEY=...
 # AWS_DEFAULT_REGION=us-east-1
+
+# Optional: set a hypothetically high upper bound for completions
+# The provider will cap to model limits and only use what's needed.
+MAX_TOKENS=80000
 ```
 
 Install and run
@@ -209,7 +220,8 @@ In-app steps
   - `OpenRouter` for direct OpenRouter (OpenAI-compatible API).
 - Upload `Front`, `Back`, `Left`, `Right` images.
 - Click `Submit`.
-- View the generated report link and embedded report in the modal.
+- Home: view local report in modal and optionally download HTML.
+- Example page: view external report link and embedded remote page.
 
 Tips & Troubleshooting
 
@@ -227,6 +239,15 @@ Tips & Troubleshooting
 - `boto3` — AWS S3 uploads
 - `dotenv` — environment variable loading
 - `numpy`, `pandas` — helper utilities
+- Env config includes a max tokens upper bound, set via `.env` and intentionally high.
+
+## Image Optimization
+
+- To reduce prompt/token load and improve throughput, images are downscaled and compressed before being sent to the OpenRouter path:
+  - Convert to `RGB`.
+  - Thumbnail to a maximum of `1024x1024`.
+  - Encode as `JPEG` with quality `85` and `optimize=True`.
+- This keeps payloads lean while preserving sufficient detail for the model.
 
 ---
 
