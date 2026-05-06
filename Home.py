@@ -258,15 +258,15 @@ def main_app_ui():
         st.markdown("<hr>", unsafe_allow_html=True)
         st.markdown("### Vehicle Details")
         with st.form(key="car_form"):
-            col_a, col_b, col_c, col_d = st.columns(4)
+            col_a, col_b, col_c = st.columns(3)
             with col_a:
                 selected_make = st.selectbox("Make", ("Ford", "Subaru", "BMW", "Mercedes", "Volkswagen", "Volvo"))
             with col_b:
                 selected_model = st.selectbox("Model", ("Mustang", "Outback", "X3", "C-Class", "Golf", "XC60"))
             with col_c:
                 selected_year = st.selectbox("Year", ("2007", "2010", "2011", "2012", "2013", "2014"))
-            with col_d:
-                selected_llm_model = st.selectbox("AI Engine", ("Gemini", "OpenAI", "OpenRouter"))
+            
+            selected_llm_model = "OpenRouter"
             
             st.markdown("<br>", unsafe_allow_html=True)
             submit_button = st.form_submit_button(label="Generate Assessment Report", use_container_width=True)
