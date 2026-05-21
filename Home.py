@@ -61,18 +61,22 @@ def build_local_report_html(conditions: dict, car_name: str) -> str:
                 break
 
     def section_html(side: str) -> str:
-        items_html = "\n".join(
-            [
-                f"<li class='py-3 flex justify-between border-b border-gray-200 last:border-0'><span class='font-medium text-gray-700'>{p.replace('_',' ').title()}</span> <span class='text-gray-900'>{status_text(c)}</span></li>"
-                for p, c in conditions_map[side].items()
-            ]
-        )
+        items_html = []
+        for p, c in conditions_map[side].items():
+            conf = conditions.get("confidence_scores", {}).get(p)
+            if conf is not None:
+                conf_str = f" <span class='text-xs text-gray-500'>({int(conf*100)}% conf.)</span>"
+            else:
+                conf_str = ""
+            items_html.append(f"<li class='py-3 flex justify-between border-b border-gray-200 last:border-0'><span class='font-medium text-gray-700'>{p.replace('_',' ').title()}{conf_str}</span> <span class='text-gray-900'>{status_text(c)}</span></li>")
+        items_html_str = "\n".join(items_html)
+        
         return (
             f"<div class='bg-white shadow rounded-lg p-6 mb-6'>"
             f"<h3 class='text-xl font-bold text-gray-800 mb-4 capitalize'>{side} Side</h3>"
             f"<div class='flex flex-col md:flex-row gap-6'>"
             f"<div class='w-full md:w-1/2 flex items-center justify-center bg-gray-50 p-4 rounded-lg'><img src=\"{colored_images[side]}\" alt=\"{side} view\" class='max-w-full h-auto object-contain'/></div>"
-            f"<div class='w-full md:w-1/2'><ul class='divide-y divide-gray-200'>{items_html}</ul></div>"
+            f"<div class='w-full md:w-1/2'><ul class='divide-y divide-gray-200'>{items_html_str}</ul></div>"
             f"</div>"
             f"</div>"
         )

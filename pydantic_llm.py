@@ -65,6 +65,8 @@ For each of the details you must answer with a score based on this descriptions 
 - 1: Seems OK (no damage)
 - 2: Minor damage (scratches, dents)
 - 3: Major damage (bent, broken, missing)
+
+Additionally, provide a confidence score between 0.0 and 1.0 for each of the evaluated parts based on how clearly you can assess the condition from the images. Store these in the 'confidence_scores' dictionary mapping the exact part name to its confidence score.
 """
 
 
@@ -161,6 +163,13 @@ class ConditionsReport(BaseModel):
     right_rear_tire: Annotated[
         int, Field(0, ge=0, le=3, description="Right rear tire condition")
     ]
+    confidence_scores: Annotated[
+        dict[str, float],
+        Field(
+            default_factory=dict,
+            description="Confidence score between 0.0 and 1.0 for each part's evaluation. Keys must match the part names exactly.",
+        ),
+    ]
 
 
 def pydantic_llm(
@@ -246,7 +255,8 @@ def pydantic_llm(
             "front_right_light, front_left_light, rear_window, trunk_tgate, trunk_cargo_area, "
             "rear_bumper, right_tail_light, left_tail_light, left_rear_quarter, left_rear_door, "
             "left_front_door, left_fender, left_front_tire, left_rear_tire, right_rear_quarter, "
-            "right_rear_door, right_front_door, right_fender, right_front_tire, right_rear_tire."
+            "right_rear_door, right_front_door, right_fender, right_front_tire, right_rear_tire. "
+            "Also include a 'confidence_scores' object mapping each of these part names to a float between 0.0 and 1.0."
         )
 
         messages = [
